@@ -24,6 +24,8 @@ class Spree::Subscription < ActiveRecord::Base
   scope :current, -> { where(state: ['active', 'inactive']) }
   
   scope :due, -> { active.where("reorder_on <= ?", Date.today) }
+  
+  after_save :touch_line_item
 
   state_machine :state, :initial => 'cart' do
     event :suspend do
@@ -169,6 +171,19 @@ class Spree::Subscription < ActiveRecord::Base
 
   def self.reorder_states
     @reorder_states ||= state_machine.states.map(&:name) - ["cart"]
+  end
+  
+  def touch_line_item
+    return true unless line_item
+    
+    Spree::PromotionHandler::Cart.new(line_item.order, line_item).activate
+    Spree::ItemAdjustments.new(line_item).update
+    
+    order_updater = Spree::OrderUpdater.new(line_item.order)
+    order_updater.update_item_count
+    order_updater.update
+    
+    true
   end
   
 end
