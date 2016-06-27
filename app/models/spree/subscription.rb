@@ -20,11 +20,11 @@ class Spree::Subscription < ActiveRecord::Base
   scope :active, -> { where(state: 'active') }
   scope :inactive, -> { where(state: 'inactive') }
   scope :cancelled, -> { where(state: 'cancelled') }
-  
+
   scope :current, -> { where(state: ['active', 'inactive']) }
-  
+
   scope :due, -> { active.where("reorder_on <= ?", Date.today) }
-  
+
   after_save :touch_line_item
 
   state_machine :state, :initial => 'cart' do
@@ -41,7 +41,7 @@ class Spree::Subscription < ActiveRecord::Base
     after_transition :on => :start, :do => :set_checkout_requirements
     after_transition :on => :resume, :do => :check_reorder_date
   end
-  
+
   def self.reorder_due!
     due.each(&:reorder)
   end
@@ -49,14 +49,14 @@ class Spree::Subscription < ActiveRecord::Base
   # DD: TODO pull out into a ReorderBuilding someday
   def reorder
     raise false unless active?
-    
+
     result = create_reorder &&
       select_shipping &&
       add_payment &&
       confirm_reorder &&
       complete_reorder &&
       calculate_reorder_date!
-      
+
     puts result ? " -> Next reorder date: #{self.reorder_on}" : " -> FAILED"
     
     result
@@ -64,8 +64,14 @@ class Spree::Subscription < ActiveRecord::Base
 
   def create_reorder
     puts "[SPREE::SUBSCRIPTION] Reordering subscription: #{id}"
+
+    unless self.user
+      puts " -> skipping order (no known user account)."
+      return false
+    end
+
     puts " -> creating order..."
-    
+
     self.new_order = Spree::Order.create(
       bill_address: self.billing_address.clone,
       ship_address: self.shipping_address.clone,
@@ -76,7 +82,7 @@ class Spree::Subscription < ActiveRecord::Base
 
     # DD: make it work with spree_multi_domain
     self.new_order.store_id = self.line_item.order.store_id if self.new_order.respond_to?(:store_id)
-    
+
     add_subscribed_line_item && progress # -> delivery
   end
 
@@ -92,7 +98,7 @@ class Spree::Subscription < ActiveRecord::Base
 
   def select_shipping
     puts " -> selecting shipping rate..."
-    
+
     # DD: shipments are created when order state goes to "delivery"
     shipment = self.new_order.shipments.first # DD: there should be only one shipment
     rate = shipment.shipping_rates.first{|r| r.shipping_method.id == self.shipping_method.id }
@@ -104,7 +110,7 @@ class Spree::Subscription < ActiveRecord::Base
 
   def add_payment
     puts " -> adding payment..."
-    
+
     payment = self.new_order.payments.build(amount: self.new_order.outstanding_balance)
     payment.source = self.source
     payment.payment_method = self.payment_method
@@ -154,36 +160,36 @@ class Spree::Subscription < ActiveRecord::Base
       :user_id => order.user_id
     )
   end
-  
+
   def new_order_state
     self.new_order.state
   end
   def progress
     current_state = new_order_state
     result = self.new_order.next
-    
+
     success = !!result && current_state != new_order_state
-    
+
     puts " !! Order progression failed. Status still '#{new_order_state}'" unless success
-    
+
     success
   end
 
   def self.reorder_states
     @reorder_states ||= state_machine.states.map(&:name) - ["cart"]
   end
-  
+
   def touch_line_item
     return true unless line_item
-    
+
     Spree::PromotionHandler::Cart.new(line_item.order, line_item).activate
     Spree::ItemAdjustments.new(line_item).update
-    
+
     order_updater = Spree::OrderUpdater.new(line_item.order)
     order_updater.update_item_count
     order_updater.update
-    
+
     true
   end
-  
+
 end
